@@ -17,9 +17,9 @@
 
 use libproto::blockchain::Block;
 use serde_json;
+use util::H256;
 use std::fs::File;
 use std::io::BufReader;
-use util::{H256, H512};
 use util::HASH_NULL_RLP;
 
 #[derive(Debug, PartialEq, Deserialize)]
@@ -31,7 +31,7 @@ pub struct Spec {
 
 #[derive(Debug, PartialEq, Deserialize)]
 pub struct Admin {
-    pub pubkey: H512,
+    pub pubkey: H256,
     pub crypto: String,
     pub identifier: String,
 }

@@ -17,7 +17,7 @@
 
 extern crate sha3;
 extern crate util;
-extern crate cita_crypto as crypto;
+extern crate cita_ed25519 as ed25519;
 extern crate libproto;
 extern crate rustc_serialize;
 extern crate protobuf;

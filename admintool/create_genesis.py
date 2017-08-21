@@ -6,9 +6,8 @@ import os
 import copy  
 import sys
 import time
-import rlp
-from rlp.utils import decode_hex, encode_hex 
-from utils import privtopub
+import binascii
+import pysodium
   
 def make_json():
     path = sys.argv[3]
@@ -20,7 +19,7 @@ def make_json():
         secret_path = os.path.join(path, "privkey")
         secret_key = open(secret_path, "r")
         sec_key = secret_key.read()
-        pubkey = "0x"+encode_hex(privtopub(decode_hex(sec_key)))[2:]
+        pubkey = "0x"+binascii.b2a_hex(pysodium.crypto_sign_sk_to_pk(binascii.a2b_hex(sec_key)))
     crypto = sys.argv[2]
     identifier = sys.argv[1]
     data = dict()

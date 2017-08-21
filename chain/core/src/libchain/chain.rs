@@ -21,7 +21,7 @@ use blooms::*;
 pub use byteorder::{BigEndian, ByteOrder};
 use cache_manager::CacheManager;
 use call_analytics::CallAnalytics;
-use cita_crypto::pubkey_to_address;
+use cita_ed25519::pubkey_to_address;
 use cita_transaction::eth_transaction::{SignedTransaction, VMTransaction, Action};
 use db;
 use db::*;
@@ -58,7 +58,7 @@ use std::sync::mpsc::Sender;
 use types::filter::Filter;
 use types::ids::{BlockId, TransactionId};
 use types::log_entry::{LogEntry, LocalizedLogEntry};
-use util::{journaldb, H256, H512, U256, H2048, Address, Bytes};
+use util::{journaldb, H256, U256, H2048, Address, Bytes};
 use util::{RwLock, Mutex};
 use util::HeapSizeOf;
 use util::kvdb::*;
@@ -358,7 +358,7 @@ impl Chain {
             let block_hash = tx_address.block_hash;
             let block_number = self.block_number(BlockId::Hash(block_hash.clone())).unwrap_or(0);
 
-            let public = H512::from_slice(signed_tx.get_signer());
+            let public = H256::from_slice(signed_tx.get_signer());
             let sender = pubkey_to_address(&public);
             info!("sender is {:?}", sender);
             let contract_address = match raw_tx.get_to().is_empty() {
@@ -871,12 +871,11 @@ impl Chain {
 
 #[cfg(test)]
 mod tests {
-    extern crate cita_crypto;
+    extern crate cita_ed25519;
     extern crate env_logger;
     extern crate mktemp;
     extern crate test;
     use self::Chain;
-    use self::cita_crypto::*;
     use super::*;
     use db;
     use libchain::block::{Block, BlockHeader, BlockBody};
@@ -888,7 +887,7 @@ mod tests {
     use std::sync::mpsc::channel;
     use std::time::{UNIX_EPOCH, Instant};
     use test::{Bencher, black_box};
-    use util::{U256, H256, Address};
+    use util::{U256, H256, H512, Address};
     use util::kvdb::{Database, DatabaseConfig};
 
     #[test]
@@ -911,10 +910,51 @@ mod tests {
 
     }
 
-    fn init_chain() -> (Arc<Chain>, PrivKey) {
+
+    fn create_block(chain: &Chain, privkey: &cita_ed25519::PrivKey, to: Address, data: Vec<u8>, nonce: (u32, u32)) -> Block {
+        let mut block = Block::new();
+
+        let mut header = BlockHeader::new();
+        header.set_prevhash(chain.current_hash.read().to_vec());
+        header.timestamp = UNIX_EPOCH.elapsed().unwrap().as_secs();
+        header.height = chain.get_current_height() + 1;
+        // header.proof= ?;
+        // header.commit= ?;
+
+
+        block.set_header(header);
+        let mut body = BlockBody::new();
+        let mut txs = Vec::new();
+        for i in nonce.0..nonce.1 {
+            let mut tx = blockchain::Transaction::new();
+            if to == Address::from(0) {
+                tx.set_to(String::from(""));
+            } else {
+                tx.set_to(to.hex());
+            }
+            tx.set_nonce(U256::from(i).to_hex());
+            tx.set_data(data.clone());
+            tx.set_valid_until_block(0);
+
+            let mut uv_tx = blockchain::UnverifiedTransaction::new();
+            uv_tx.set_transaction(tx);
+
+            let mut stx = blockchain::SignedTransaction::new();
+            stx.set_transaction_with_sig(uv_tx);
+            stx.sign(*privkey);
+
+            txs.push(stx);
+        }
+        body.set_transactions(RepeatedField::from_vec(txs));
+        block.set_body(body);
+        block
+    }
+
+    #[bench]
+    fn bench_execute_block(b: &mut Bencher) {
         let _ = env_logger::init();
-        let privkey = PrivKey::from(H256::from("35593bd681b8fc0737c2fdbef6e3c89a975dde47176dbd9724091e84fbf305b0"));
-        let keypair = KeyPair::from_privkey(privkey).unwrap();
+        let keypair = cita_ed25519::KeyPair::gen_keypair();
+        let privkey = keypair.privkey();
         let pubkey = keypair.pubkey();
         let tempdir = mktemp::Temp::new_dir().unwrap().to_path_buf();
         let config = DatabaseConfig::with_columns(db::NUM_COLUMNS);
@@ -934,53 +974,6 @@ mod tests {
         };
         let (sync_tx, _) = channel();
         let (chain, _) = Chain::init_chain(Arc::new(db), genesis, sync_tx);
-        (chain, privkey)
-    }
-
-    fn create_block(chain: &Chain, privkey: PrivKey, to: Address, data: Vec<u8>, nonce: (u32, u32)) -> Block {
-        let mut block = Block::new();
-
-        let mut header = BlockHeader::new();
-        header.set_prevhash(chain.current_hash.read().to_vec());
-        header.timestamp = UNIX_EPOCH.elapsed().unwrap().as_secs();
-        header.height = chain.get_current_height() + 1;
-        // header.proof= ?;
-        // header.commit= ?;
-
-
-        block.set_header(header);
-        let mut body = BlockBody::new();
-        let mut txs = Vec::new();
-        for i in nonce.0..nonce.1 {
-            // 1) tx = (to, data(code), nonce)
-            let mut tx = blockchain::Transaction::new();
-            if to == Address::from(0) {
-                tx.set_to(String::from(""));
-            } else {
-                tx.set_to(to.hex());
-            }
-            tx.set_nonce(U256::from(i).to_hex());
-            tx.set_data(data.clone());
-            tx.set_valid_until_block(0);
-
-            let mut uv_tx = blockchain::UnverifiedTransaction::new();
-            uv_tx.set_transaction(tx);
-
-            // 2) stx = (from, content(code, nonce, signature))
-            let mut stx = blockchain::SignedTransaction::new();
-            stx.set_transaction_with_sig(uv_tx);
-            stx.sign(privkey);
-
-            txs.push(stx);
-        }
-        body.set_transactions(RepeatedField::from_vec(txs));
-        block.set_body(body);
-        block
-    }
-
-    #[bench]
-    fn bench_execute_block(b: &mut Bencher) {
-        let (chain, privkey) = init_chain();
         let data = "60606040523415600b57fe5b5b5b5b608e8061001c6000396000f30060606040526000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff1680635524107714603a575bfe5b3415604157fe5b605560048080359060200190919050506057565b005b806000819055505b505600a165627a7a7230582079b763be08c24124c9fa25c78b9d221bdee3e981ca0b2e371628798c41e292ca0029"
             .from_hex()
             .unwrap();
@@ -1013,8 +1006,102 @@ mod tests {
     }
 
     #[test]
+    fn test_code_at() {
+        let _ = env_logger::init();
+        let keypair = cita_ed25519::KeyPair::gen_keypair();
+        let privkey = keypair.privkey();
+        let pubkey = keypair.pubkey();
+        let tempdir = mktemp::Temp::new_dir().unwrap().to_path_buf();
+        let config = DatabaseConfig::with_columns(db::NUM_COLUMNS);
+        let db = Database::open(&config, &tempdir.to_str().unwrap()).unwrap();
+        let genesis = Genesis {
+            spec: Spec {
+                prevhash: H256::from(0),
+                timestamp: 0,
+                admin: Admin {
+                    pubkey: *pubkey,
+                    crypto: privkey.hex(),
+                    identifier: String::from(""),
+                },
+            },
+            block: Block::default(),
+            hash: H256::default(),
+        };
+        let (sync_tx, _) = channel();
+        let (chain, _) = Chain::init_chain(Arc::new(db), genesis, sync_tx);
+        /*
+			pragma solidity ^0.4.8;
+
+			contract mortal {
+				/* Define variable owner of the type address*/
+				address owner;
+
+				/* this function is executed at initialization and sets the owner of the contract */
+				function mortal() { owner = msg.sender; }
+
+				/* Function to recover the funds on the contract */
+				function kill() { if (msg.sender == owner) selfdestruct(owner); }
+			}
+
+			contract greeter is mortal {
+				/* define variable greeting of the type string */
+				string greeting;
+
+				/* this runs when the contract is executed */
+				function greeter(string _greeting) public {
+					greeting = _greeting;
+				}
+
+				/* main function */
+				function greet() constant returns (string) {
+					return greeting;
+                }
+			}
+		*/
+        let data = "6060604052341561000f57600080fd5b5b336000806101000a81548173ffffffffffffffffffffffffffffffffffffffff021916908373ffffffffffffffffffffffffffffffffffffffff1602179055505b5b61010c806100616000396000f30060606040526000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff16806341c0e1b514603d575b600080fd5b3415604757600080fd5b604d604f565b005b6000809054906101000a900473ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff163373ffffffffffffffffffffffffffffffffffffffff16141560dd576000809054906101000a900473ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16ff5b5b5600a165627a7a72305820de567cec1777627b898689638799169aacaf87d3ea313a0d8dab5758bac937670029"
+            .from_hex()
+            .unwrap();
+        println!("data: {:?}", data);
+
+        let block = create_block(&chain, privkey, Address::from(0), data, (0, 1));
+        chain.set_block(block.clone());
+
+        let txhash = H256::from_slice(block.get_body().get_transactions()[0].get_tx_hash());
+        let receipt = chain.transaction_address(&txhash)
+                           .and_then(|tx_address| chain.localized_receipt(txhash, tx_address))
+                           .unwrap();
+
+        let contract_address = receipt.contract_address.unwrap();
+        println!("contract address: {}", contract_address);
+        let code = chain.code_at(&contract_address, BlockId::Latest);
+        assert!(code.is_some());
+        assert!(code.unwrap().is_some());
+    }
+
+    #[test]
     fn test_contract() {
-        let (chain, privkey) = init_chain();
+        let _ = env_logger::init();
+        let privkey = H512::from("54d50511873787675e0c88f77362b8fdb015af9f183eb5be585108fb598a38d3c1e9ce1ae6fc7d6168d53b257eea313efb4b9e8f2dc47f8f5c8011d104ed0202");
+        let keypair = cita_ed25519::KeyPair::from_privkey(privkey).unwrap();
+        let pubkey = keypair.pubkey();
+        let tempdir = mktemp::Temp::new_dir().unwrap().to_path_buf();
+        let config = DatabaseConfig::with_columns(db::NUM_COLUMNS);
+        let db = Database::open(&config, &tempdir.to_str().unwrap()).unwrap();
+        let genesis = Genesis {
+            spec: Spec {
+                prevhash: H256::from(0),
+                timestamp: 0,
+                admin: Admin {
+                    pubkey: *pubkey,
+                    crypto: privkey.hex(),
+                    identifier: String::from(""),
+                },
+            },
+            block: Block::default(),
+            hash: H256::default(),
+        };
+        let (sync_tx, _) = channel();
+        let (chain, _) = Chain::init_chain(Arc::new(db), genesis, sync_tx);
         /*
             pragma solidity ^0.4.8;
             contract ConstructSol {
@@ -1041,7 +1128,7 @@ mod tests {
 
         println!("data: {:?}", data);
 
-        let block = create_block(&chain, privkey, Address::from(0), data, (0, 1));
+        let block = create_block(&chain, &privkey, Address::from(0), data, (0, 1));
         chain.set_block(block.clone());
 
         let txhash = H256::from_slice(block.get_body().get_transactions()[0].get_tx_hash());
@@ -1054,15 +1141,51 @@ mod tests {
         println!("contract address: {}", contract_address);
         let log = &receipt.logs[0];
         assert_eq!(contract_address, log.address);
+        assert_eq!(contract_address, Address::from("6f3b2b355848918472d79b76f8b39729088a0d00"));
+        // log data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 111, 59, 43, 53, 88, 72, 145, 132, 114, 215, 155, 118, 248, 179, 151, 41, 8, 138, 13, 0]
         println!("contract_address as slice {:?}", contract_address.to_vec().as_slice());
         assert!(log.data.as_slice().ends_with(contract_address.to_vec().as_slice()));
-        let code = chain.code_at(&contract_address, BlockId::Latest);
-        assert!(code.is_some());
-        assert!(code.unwrap().is_some());
+        assert_eq!(
+            log.data,
+            Bytes::from(vec![
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                111,
+                59,
+                43,
+                53,
+                88,
+                72,
+                145,
+                132,
+                114,
+                215,
+                155,
+                118,
+                248,
+                179,
+                151,
+                41,
+                8,
+                138,
+                13,
+                0,
+            ])
+        );
 
         // set a=10
         let data = "60fe47b1000000000000000000000000000000000000000000000000000000000000000a".from_hex().unwrap();
-        let block = create_block(&chain, privkey, contract_address, data, (1, 2));
+        let block = create_block(&chain, &privkey, contract_address, data, (1, 2));
         chain.set_block(block.clone());
         let txhash = H256::from_slice(block.get_body().get_transactions()[0].get_tx_hash());
         let receipt = chain.transaction_address(&txhash)

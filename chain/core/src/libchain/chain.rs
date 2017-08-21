@@ -887,7 +887,7 @@ mod tests {
     use std::sync::mpsc::channel;
     use std::time::{UNIX_EPOCH, Instant};
     use test::{Bencher, black_box};
-    use util::{U256, H256, H512, Address};
+    use util::{U256, H256, Address};
     use util::kvdb::{Database, DatabaseConfig};
 
     #[test]
@@ -1081,8 +1081,8 @@ mod tests {
     #[test]
     fn test_contract() {
         let _ = env_logger::init();
-        let privkey = H512::from("54d50511873787675e0c88f77362b8fdb015af9f183eb5be585108fb598a38d3c1e9ce1ae6fc7d6168d53b257eea313efb4b9e8f2dc47f8f5c8011d104ed0202");
-        let keypair = cita_ed25519::KeyPair::from_privkey(privkey).unwrap();
+        let keypair = cita_ed25519::KeyPair::gen_keypair();
+        let privkey = keypair.privkey();
         let pubkey = keypair.pubkey();
         let tempdir = mktemp::Temp::new_dir().unwrap().to_path_buf();
         let config = DatabaseConfig::with_columns(db::NUM_COLUMNS);
